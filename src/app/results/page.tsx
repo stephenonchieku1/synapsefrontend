@@ -35,12 +35,19 @@ interface HerbalAlternative {
 
 interface DrugAnalysis {
   name: string;
+  is_brand_name?: boolean;
+  brand_name?: string | null;
+  generic_name: string;
+  drug_class: string;
+  drug_class_sw?: string;
   dosage: string;
   frequency: string;
   duration: string;
   uses: string[];
   side_effects: string[];
   warnings: string[];
+  suitability_warnings: string;
+  suitability_warnings_sw?: string;
   simple_explanation: string;
   ocr_raw_text: string;
   safety_disclaimer: string;
@@ -116,6 +123,10 @@ function ResultsContent() {
     assistantTitle: lang === 'en' ? 'Synapse Voice Assist' : 'Msaidizi wa Sauti wa Synapse',
     speakingState: lang === 'en' ? 'Assistant is speaking now...' : 'Msaidizi anazungumza sasa...',
     clickReplay: lang === 'en' ? 'Click the sphere to replay the overview' : 'Bofya tu tufe ili kusikiliza tena maelezo',
+    genericName: lang === 'en' ? 'Generic Active Ingredient' : 'Kiambata Hai (Generic)',
+    drugClass: lang === 'en' ? 'Drug Class' : 'Kundi la Dawa',
+    suitabilityTitle: lang === 'en' ? 'Suitability & Conditions Warning' : 'Tahadhari ya Kufaa Dawa na Hali ya Afya',
+    suitabilityIntro: lang === 'en' ? 'Warning: This medication may not be suitable for everyone, especially individuals with certain health conditions.' : 'Ilani: Dawa hii inaweza isiwe salama kwa kila mtu, hasa watu walio na hali fulani za afya.',
   };
 
   useEffect(() => {
@@ -309,9 +320,30 @@ function ResultsContent() {
               </div>
               <div className="space-y-1">
                 <h1 className="text-3xl font-extrabold text-[var(--foreground)] tracking-tight">{analysis.name}</h1>
-                <p className="text-sm font-semibold text-zinc-450">Strength/Dosage: {analysis.dosage || 'Not specified'}</p>
+                
+                <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                  <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[var(--foreground)] text-[var(--background)]">
+                    {lang === 'sw' ? (analysis.drug_class_sw || analysis.drug_class) : analysis.drug_class}
+                  </span>
+                  {analysis.generic_name && (
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[var(--secondary)] border border-[var(--card-border)] text-zinc-450">
+                      {t.genericName}: <span className="text-[var(--foreground)]">{analysis.generic_name}</span>
+                    </span>
+                  )}
+                </div>
+                
+                <p className="text-sm font-semibold text-zinc-455 mt-2">Strength/Dosage: {analysis.dosage || 'Not specified'}</p>
               </div>
             </div>
+
+            {analysis.is_brand_name && (
+              <div className="mt-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-200 text-xs leading-relaxed flex items-start gap-2.5">
+                <Pill size={16} className="shrink-0 mt-0.5 text-amber-450 animate-pulse" />
+                <p>
+                  <strong>{analysis.name}</strong> {lang === 'sw' ? 'ni jina la chapa ya viambata hai vya dawa ya' : 'is a brand name for the active ingredient'} <strong>{analysis.generic_name}</strong>, {lang === 'sw' ? 'ambayo huainishwa kama' : 'which is categorized as a(n)'} <strong>{(lang === 'sw' ? (analysis.drug_class_sw || analysis.drug_class) : analysis.drug_class).toLowerCase()}</strong>.
+                </p>
+              </div>
+            )}
 
             {/* Quick Metrics */}
             <div className="grid grid-cols-2 gap-4 mt-6 border-t border-[var(--card-border)] pt-6">
@@ -342,6 +374,25 @@ function ResultsContent() {
               </p>
             </div>
           </div>
+
+          {/* Suitability Warning Callout Card */}
+          {(analysis.suitability_warnings || analysis.suitability_warnings_sw) && (
+            <div className="glass-panel rounded-3xl p-6 border border-amber-500/20 bg-gradient-to-r from-amber-500/[0.03] to-transparent relative overflow-hidden transition-all duration-300">
+              <div className="absolute top-[-20px] left-[-20px] w-24 h-24 bg-amber-500/5 rounded-full blur-xl pointer-events-none" />
+              <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2 mb-3">
+                <AlertTriangle size={18} className="text-amber-550 shrink-0" />
+                <span>{t.suitabilityTitle}</span>
+              </h3>
+              <div className="space-y-2 text-sm text-[var(--foreground)] opacity-90 leading-relaxed">
+                <p className="font-semibold text-amber-300/90 text-xs">
+                  {t.suitabilityIntro}
+                </p>
+                <div className="bg-[var(--secondary)] p-4 rounded-2xl border border-[var(--card-border)] text-zinc-350 italic mt-2.5">
+                  "{lang === 'sw' ? (analysis.suitability_warnings_sw || analysis.suitability_warnings) : analysis.suitability_warnings}"
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Uses, Warnings, Side effects Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
