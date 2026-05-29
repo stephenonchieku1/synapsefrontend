@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Volume2, VolumeX, Bot, User, Loader2 } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Send, Volume2, VolumeX, Bot, User, Loader2, Mic, MicOff } from 'lucide-react';
 
 interface Message {
   id?: number;
@@ -20,6 +20,32 @@ interface ChatInterfaceProps {
   lang?: 'en' | 'sw';
 }
 
+// Extend Window to include vendor-prefixed SpeechRecognition
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+
+type SpeechRecognitionInstance = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onerror: ((event: Event & { error: string }) => void) | null;
+  onend: (() => void) | null;
+  onstart: (() => void) | null;
+};
+
+function getSpeechRecognition(): (new () => SpeechRecognitionInstance) | null {
+  if (typeof window === 'undefined') return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
 export default function ChatInterface({
   uploadId,
   initialMessages,
@@ -32,7 +58,13 @@ export default function ChatInterface({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<number | string | null>(null);
-  
+
+  // Voice input state
+  const [isListening, setIsListening] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const speechSupported = typeof window !== 'undefined' && getSpeechRecognition() !== null;
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -46,12 +78,15 @@ export default function ChatInterface({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Clean up audio on unmount
+  // Clean up audio and speech recognition on unmount
   useEffect(() => {
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
         onPlayStateChange(false);
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
       }
     };
   }, [onPlayStateChange]);
@@ -60,7 +95,7 @@ export default function ChatInterface({
     if (audioRef.current) {
       audioRef.current.pause();
       onPlayStateChange(false);
-      
+
       // If clicking the currently playing audio, stop it
       if (playingAudioId === id) {
         setPlayingAudioId(null);
@@ -86,11 +121,9 @@ export default function ChatInterface({
     };
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
+  const submitMessage = useCallback(async (userMessage: string) => {
+    if (!userMessage.trim() || isLoading) return;
 
-    const userMessage = input.trim();
     setInput('');
     setIsLoading(true);
 
@@ -112,7 +145,7 @@ export default function ChatInterface({
       if (!res.ok) throw new Error('Failed to send message');
 
       const data = await res.json();
-      
+
       const assistantMsg: Message = {
         role: 'assistant',
         content: data.content,
@@ -142,7 +175,90 @@ export default function ChatInterface({
     } finally {
       setIsLoading(false);
     }
+  }, [isLoading, uploadId, lang, backendUrl, onNewAudioGenerated]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitMessage(input);
   };
+
+  // Voice input handlers
+  const startListening = useCallback(() => {
+    const SpeechRecognitionCtor = getSpeechRecognition();
+    if (!SpeechRecognitionCtor) return;
+
+    // Stop any playing audio when mic starts
+    if (audioRef.current) {
+      audioRef.current.pause();
+      setPlayingAudioId(null);
+      onPlayStateChange(false);
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = lang === 'sw' ? 'sw-KE' : 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setInterimTranscript('');
+    };
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = '';
+      let finalText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalText += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+      if (finalText) {
+        setInput(prev => (prev + ' ' + finalText).trim());
+        setInterimTranscript('');
+      } else {
+        setInterimTranscript(interim);
+      }
+    };
+
+    recognition.onerror = (event: Event & { error: string }) => {
+      console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+      setInterimTranscript('');
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      setInterimTranscript('');
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  }, [lang, onPlayStateChange]);
+
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+    setInterimTranscript('');
+  }, []);
+
+  const toggleListening = useCallback(() => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  }, [isListening, startListening, stopListening]);
+
+  // Determine the displayed placeholder
+  const displayPlaceholder = isListening
+    ? (lang === 'sw' ? 'Sikiliza... sema sasa' : 'Listening... speak now')
+    : (lang === 'sw' ? 'Uliza swali la ziada kuhusu dawa hii...' : 'Ask a follow-up question...');
 
   return (
     <div className="flex flex-col h-[520px] glass-panel rounded-3xl overflow-hidden">
@@ -154,6 +270,12 @@ export default function ChatInterface({
             {lang === 'sw' ? 'Msaidizi wa Mazungumzo wa Synapse' : 'Synapse Chat Assistant'}
           </span>
         </div>
+        {isListening && (
+          <div className="flex items-center gap-2 text-xs text-red-400 font-medium animate-pulse">
+            <div className="w-2 h-2 bg-red-500 rounded-full" />
+            {lang === 'sw' ? 'Inarekodi...' : 'Recording...'}
+          </div>
+        )}
       </div>
 
       {/* Messages History */}
@@ -230,14 +352,42 @@ export default function ChatInterface({
 
       {/* Input Box */}
       <form onSubmit={handleSubmit} className="p-4 bg-[var(--secondary)] border-t border-[var(--card-border)] flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={lang === 'sw' ? 'Uliza swali la ziada kuhusu dawa hii...' : 'Ask a follow-up question...'}
-          className="flex-1 bg-[var(--background)] border border-[var(--card-border)] rounded-2xl px-4 py-3 text-sm text-[var(--foreground)] placeholder-zinc-500 focus:outline-none focus:border-[var(--foreground)]/30 transition-colors"
-          disabled={isLoading}
-        />
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={interimTranscript ? `${input} ${interimTranscript}`.trim() : input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={displayPlaceholder}
+            className={`w-full bg-[var(--background)] border rounded-2xl px-4 py-3 text-sm text-[var(--foreground)] placeholder-zinc-500 focus:outline-none transition-colors ${
+              isListening
+                ? 'border-red-500/50 ring-2 ring-red-500/20'
+                : 'border-[var(--card-border)] focus:border-[var(--foreground)]/30'
+            }`}
+            disabled={isLoading}
+          />
+        </div>
+
+        {/* Microphone Button */}
+        {speechSupported && (
+          <button
+            type="button"
+            onClick={toggleListening}
+            disabled={isLoading}
+            className={`w-12 h-12 rounded-2xl flex items-center justify-center hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer shrink-0 border ${
+              isListening
+                ? 'bg-red-500 text-white border-red-600 shadow-lg shadow-red-500/25 animate-pulse'
+                : 'bg-[var(--background)] text-[var(--foreground)] border-[var(--card-border)] hover:bg-[var(--primary)] hover:text-[var(--background)]'
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+            title={isListening
+              ? (lang === 'sw' ? 'Simamisha kunasa sauti' : 'Stop recording')
+              : (lang === 'sw' ? 'Anza kunasa sauti' : 'Start voice input')
+            }
+          >
+            {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+          </button>
+        )}
+
+        {/* Send Button */}
         <button
           type="submit"
           disabled={isLoading || !input.trim()}
